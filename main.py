@@ -6,7 +6,7 @@ import os
 import torch
 import torch.nn as nn
 import torch.onnx
-
+from torch.utils.tensorboard import SummaryWriter
 import data
 import model
 
@@ -50,7 +50,9 @@ parser.add_argument('--nhead', type=int, default=2,
 parser.add_argument('--dry-run', action='store_true',
                     help='verify the code and the model')
 args = parser.parse_args()
-
+run_name = str(time.time())
+writer = SummaryWriter(f"runs/{run_name}")
+writer.add_text("args", str(args))
 # Set the random seed manually for reproducibility.
 torch.manual_seed(args.seed)
 if torch.cuda.is_available():
@@ -157,7 +159,7 @@ def evaluate(data_source):
     return total_loss / (len(data_source) - 1)
 
 
-def train():
+def train(epoch):
     # Turn on training mode which enables dropout.
     model.train()
     total_loss = 0.
@@ -193,10 +195,14 @@ def train():
                     'loss {:5.2f} | ppl {:8.2f}'.format(
                 epoch, batch, len(train_data) // args.bptt, lr,
                 elapsed * 1000 / args.log_interval, cur_loss, math.exp(cur_loss)))
+            writer.add_scalar('train/total_loss',total_loss,epoch)
             total_loss = 0
+            writer.add_scalar('train/ppl',math.exp(cur_loss),epoch)
             start_time = time.time()
         if args.dry_run:
             break
+    writer.add_scalar('train/total_loss', total_loss, epoch)
+
 
 
 def export_onnx(path, batch_size, seq_len):
@@ -215,8 +221,13 @@ best_val_loss = None
 try:
     for epoch in range(1, args.epochs+1):
         epoch_start_time = time.time()
-        train()
+        train(epoch)
         val_loss = evaluate(val_data)
+        writer.add_scalar('val/total_loss', val_loss, epoch)
+        writer.add_scalar('val/ppl', math.exp(val_loss), epoch)
+        test_loss = evaluate(test_data)
+        writer.add_scalar('test/total_loss', test_loss, epoch)
+        writer.add_scalar('test/ppl', math.exp(test_loss), epoch)
         print('-' * 89)
         print('| end of epoch {:3d} | time: {:5.2f}s | valid loss {:5.2f} | '
                 'valid ppl {:8.2f}'.format(epoch, (time.time() - epoch_start_time),
@@ -253,3 +264,5 @@ print('=' * 89)
 if len(args.onnx_export) > 0:
     # Export the model in ONNX format.
     export_onnx(args.onnx_export, batch_size=1, seq_len=args.bptt)
+
+writer.close()
